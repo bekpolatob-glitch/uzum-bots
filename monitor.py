@@ -70,6 +70,14 @@ class MonitorDB:
         c.execute('SELECT stock, ts FROM history WHERE product_id=? ORDER BY ts DESC LIMIT 2', (product_id,))
         return c.fetchall()
 
+    def get_history_since(self, product_id, since_iso=None):
+        c = self.conn.cursor()
+        if since_iso:
+            c.execute('SELECT stock, ts FROM history WHERE product_id=? AND ts>=? ORDER BY ts ASC', (product_id, since_iso))
+        else:
+            c.execute('SELECT stock, ts FROM history WHERE product_id=? ORDER BY ts ASC', (product_id,))
+        return c.fetchall()
+
     def list_all_products(self):
         c = self.conn.cursor()
         c.execute('SELECT product_id, name, url, last_stock FROM products')
@@ -170,3 +178,109 @@ class UzumMonitor:
         short_supply.sort(key=lambda x: (x.get('stock') is None, x.get('stock') if x.get('stock') is not None else 999))
 
         return high_demand, short_supply
+
+    def increased_shortage_last_days(self, days: int = 3, threshold: int = 5):
+        """Return products where shortage increased in last `days` days.
+        
+        Shortage = stock <= threshold. Detect products that were NOT in shortage
+        3 days ago but ARE in shortage now.
+        """
+        from datetime import timedelta
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        increased = []
+        all_products = self.db.list_all_products()
+
+        for p in all_products:
+            hist = self.db.get_history_since(p['product_id'], since_iso=since)
+            if not hist:
+                continue
+            # hist sorted asc: take first (oldest) and last (newest)
+            first_stock = hist[0][0]
+            last_stock = hist[-1][0]
+            if first_stock is None or last_stock is None:
+                continue
+            # was NOT in shortage, now IS in shortage
+            was_ok = first_stock > threshold
+            is_short = last_stock <= threshold
+            if was_ok and is_short:
+                item = p.copy()
+                item['stock_then'] = first_stock
+                item['stock_now'] = last_stock
+                item['delta'] = last_stock - first_stock
+                increased.append(item)
+
+        increased.sort(key=lambda x: x.get('stock_now', 999))
+        return increased
+
+    def increased_demand_last_days(self, days: int = 3, min_drop: int = 5):
+        """Return products where demand increased (stock dropped) in last `days` days.
+        
+        Detect products with significant stock drop: >= min_drop or >= 10% of initial.
+        """
+        from datetime import timedelta
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        demand = []
+        all_products = self.db.list_all_products()
+
+        for p in all_products:
+            hist = self.db.get_history_since(p['product_id'], since_iso=since)
+            if not hist:
+                continue
+            # hist sorted asc: take first (oldest) and last (newest)
+            first_stock = hist[0][0]
+            last_stock = hist[-1][0]
+            if first_stock is None or last_stock is None:
+                continue
+            try:
+                delta = int(first_stock) - int(last_stock)
+            except Exception:
+                continue
+            if first_stock > 0 and delta >= max(min_drop, int(first_stock * 0.1)):
+                item = p.copy()
+                item['stock_then'] = first_stock
+                item['stock_now'] = last_stock
+                item['delta'] = delta
+                try:
+                    item['delta_pct'] = round((delta / first_stock) * 100)
+                except Exception:
+                    item['delta_pct'] = None
+                demand.append(item)
+
+        demand.sort(key=lambda x: x.get('delta', 0), reverse=True)
+        return demand
+
+    def top_sellers_last_days(self, days: int = 7, min_sold: int = 5):
+        """Return products that sold well in the last `days` days.
+
+        Heuristic: compute earliest and latest stock in the period; sold = earliest - latest.
+        """
+        from datetime import datetime, timedelta
+
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        sellers = []
+        all_products = self.db.list_all_products()
+        for p in all_products:
+            hist = self.db.get_history_since(p['product_id'], since_iso=since)
+            if not hist:
+                continue
+            # hist sorted asc: take first and last
+            first_stock = hist[0][0]
+            last_stock = hist[-1][0]
+            if first_stock is None or last_stock is None:
+                continue
+            sold = 0
+            try:
+                sold = int(first_stock) - int(last_stock)
+            except Exception:
+                continue
+            if sold >= min_sold:
+                item = p.copy()
+                item['sold'] = sold
+                try:
+                    item['sold_pct'] = round((sold / first_stock) * 100)
+                except Exception:
+                    item['sold_pct'] = None
+                sellers.append(item)
+
+        sellers.sort(key=lambda x: x.get('sold', 0), reverse=True)
+        return sellers

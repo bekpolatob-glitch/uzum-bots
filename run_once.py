@@ -15,53 +15,28 @@ def main():
 
     monitor = UzumMonitor()
 
-    # fetch current products
+    # fetch current products and persist to DB
     seen = {}
     for url in monitor.category_urls:
         prods = monitor.fetch_products_from_url(url)
         for p in prods:
             seen[p['product_id']] = p
+            # persist observation to DB
+            try:
+                monitor.db.upsert(p['product_id'], p['name'], p['url'], p.get('stock'))
+            except Exception:
+                pass
 
-    # load previous state (product_id -> stock)
-    old_state = {}
-    if os.path.exists('state.json'):
-        try:
-            with open('state.json', 'r') as f:
-                old_state = json.load(f)
-        except Exception:
-            old_state = {}
+    # compute 3-day trends: increased shortage and demand
+    increased_shortage = monitor.increased_shortage_last_days(days=3, threshold=5)
+    increased_demand = monitor.increased_demand_last_days(days=3, min_drop=5)
 
-    high_demand = []
-    short_supply = []
-
-    for pid, p in seen.items():
-        prev = old_state.get(pid)
-        last = p.get('stock')
-        # short supply
-        if last is not None and last <= 5:
-            item = p.copy()
-            item['stock'] = last
-            short_supply.append(item)
-
-        # high demand: compare prev->last
-        if isinstance(prev, int) and isinstance(last, int):
-            delta = prev - last
-            if prev > 0 and delta >= max(3, int(prev * 0.1)):
-                item = p.copy()
-                item['stock'] = last
-                item['prev_stock'] = prev
-                item['demand_delta'] = delta
-                try:
-                    item['demand_pct'] = round((delta / prev) * 100)
-                except Exception:
-                    item['demand_pct'] = None
-                high_demand.append(item)
-
-    # send report if anything interesting (or always send — here we send always)
-    text = format_report(high_demand, short_supply)
+    # send report
+    from bot import format_report
+    text = format_report(increased_shortage=increased_shortage, increased_demand=increased_demand)
     send_telegram(token, chat_id, text)
 
-    # write current state for next run
+    # write current minimal state for compatibility (product_id -> stock)
     new_state = {pid: (p.get('stock') if isinstance(p.get('stock'), int) else None) for pid, p in seen.items()}
     with open('state.json', 'w') as f:
         json.dump(new_state, f, indent=2, ensure_ascii=False)

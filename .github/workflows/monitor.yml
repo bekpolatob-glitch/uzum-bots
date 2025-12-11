@@ -2,7 +2,7 @@ name: Uzum Monitor
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # every 30 minutes (UTC)
+    - cron: '0 0 */3 * *' # every 3 days at midnight UTC
   workflow_dispatch: {}
 
 permissions:
@@ -31,6 +31,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # fallback to repo .env value if secrets not set
+          UZUM_CATEGORY_URLS: ${{ env.UZUM_CATEGORY_URLS }}
         run: |
           python run_once.py
 

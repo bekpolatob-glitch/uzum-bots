@@ -20,32 +20,35 @@ def send_telegram(token: str, chat_id: str, text: str):
     return resp
 
 
-def format_report(high_demand, short_supply):
+def format_report(increased_shortage=None, increased_demand=None):
     lines = []
     t = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
-    lines.append(f"Uzum monitor report — {t}\n")
+    lines.append(f"Uzum Monitor Report (3-day analysis) — {t}\n")
 
-    if high_demand:
-        lines.append("<b>High demand (recent stock drops)</b>:\n")
-        for p in high_demand[:15]:
-            delta = p.get('demand_delta')
-            pct = p.get('demand_pct')
-            extra = []
-            if delta is not None:
-                extra.append(f"Δ{delta}")
+    if increased_shortage:
+        lines.append("<b>Increased shortage (last 3 days)</b>:\n")
+        for p in increased_shortage[:15]:
+            then = p.get('stock_then')
+            now = p.get('stock_now')
+            extra = f" ({then} → {now})"
+            lines.append(f"• <a href=\"{p['url']}\">{p['name']}</a>{extra}")
+    else:
+        lines.append("No products with increased shortage.\n")
+
+    if increased_demand:
+        lines.append("\n<b>Increased demand (last 3 days)</b>:\n")
+        for p in increased_demand[:15]:
+            delta = p.get('delta')
+            pct = p.get('delta_pct')
+            then = p.get('stock_then')
+            now = p.get('stock_now')
+            extra = [f"Δ{delta}"]
             if pct is not None:
                 extra.append(f"{pct}%")
-            extra_s = ' (' + ', '.join(extra) + ')' if extra else ''
-            lines.append(f"• <a href=\"{p['url']}\">{p['name']}</a> — stock: {p.get('stock')}{extra_s}")
+            extra_s = ' (' + ', '.join(extra) + f", {then} → {now})"
+            lines.append(f"• <a href=\"{p['url']}\">{p['name']}</a> — {extra_s}")
     else:
-        lines.append("No high-demand products detected.\n")
-
-    if short_supply:
-        lines.append("\n<b>Short supply (low/none)</b>:\n")
-        for p in short_supply[:15]:
-            lines.append(f"• <a href=\"{p['url']}\">{p['name']}</a> — stock: {p.get('stock')}")
-    else:
-        lines.append("\nNo short-supply products detected.")
+        lines.append("\nNo products with increased demand.")
 
     return "\n".join(lines)
 
@@ -59,18 +62,19 @@ def main():
 
     monitor = UzumMonitor(category_urls=getattr(config, 'CATEGORY_URLS', None))
 
-    # run immediately, then every 30 minutes
+    # run immediately, then every 3 days
     while True:
         try:
-            high, short = monitor.run_check()
-            text = format_report(high, short)
+            increased_shortage = monitor.increased_shortage_last_days(days=3, threshold=5)
+            increased_demand = monitor.increased_demand_last_days(days=3, min_drop=5)
+            text = format_report(increased_shortage=increased_shortage, increased_demand=increased_demand)
             send_telegram(token, chat_id, text)
-            logging.info('Report sent — %d high, %d short', len(high), len(short))
+            logging.info('Report sent — %d shortage increase, %d demand increase', len(increased_shortage), len(increased_demand))
         except Exception as e:
             logging.exception('Error during check: %s', e)
 
-        # sleep 30 minutes
-        time.sleep(1800)
+        # sleep 3 days
+        time.sleep(259200)
 
 
 if __name__ == '__main__':
