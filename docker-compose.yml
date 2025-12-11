@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  uzum-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./uzum_monitor.db:/app/uzum_monitor.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

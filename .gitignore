@@ -1,0 +1,4 @@
+venv/
+.env
+uzum_monitor.db
+__pycache__/
